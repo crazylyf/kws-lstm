@@ -1,0 +1,8 @@
+## Input ##
+*input.txt
+*text
+*feats.scp
+
+## Generation ##
+vocab
+feat_dim
