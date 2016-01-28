@@ -246,9 +246,6 @@ local i=0
 local epoch=1
 local lastsample=1
 local eval
-		local nbatch = eval_loader.nbatches
-		local val_loss = eval_split(nbatch) 
-		os.exit()
 repeat
 	--local epoch = i / train_loader.nbatches
 	i = i+1
