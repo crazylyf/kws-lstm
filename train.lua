@@ -4,7 +4,8 @@ require 'nngraph'
 require 'optim'
 
 local LSTM = require 'LSTM'
-local SplitMinibatchLoader = require 'SplitMinibatchLoader'
+--local SplitMinibatchLoader = require 'SplitMinibatchLoader'
+local SplitMinibatchLoader = require 'SplitMinibatchLoaderTensor'
 local model_utils = require 'model_utils'
 require 'misc'
 
@@ -14,12 +15,13 @@ cmd:text('Train a QbE Keyword Spotting Model')
 cmd:text()
 cmd:text('Options')
 -- data
-cmd:option('-data_dir', './', 'directory of the data')
+cmd:option('-train_data_dir', './data/tensors/train_tensors/', 'directory of the training data')
+cmd:option('-eval_data_dir', './data/tensors/eval_tensors/', 'directory of the evaluating data')
 cmd:option('-featscp', 'feats.scp', 'filename of input feature scp')
 -- model params
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
-cmd:option('-model', 'lstm', 'lstm,gru or rnn')
+cmd:option('-model', 'lstm', 'lstm, gru or rnn')
 -- optimization
 cmd:option('-learning_rate', 2e-3, 'learning rate')
 cmd:option('-learning_rate_decay', 0.97, 'learning rate decay')
@@ -47,6 +49,7 @@ cmd:text()
 
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
+torch.setdefaulttensortype('torch.FloatTensor')
 
 local test_frac = math.max(0, 1-(opt.train_frac+opt.val_frac))
 local split_sizes = {opt.train_frac, opt_val_frac, test_frac}
@@ -65,10 +68,10 @@ end
 --data
 -- create the data loader class
 print('preparing data')
-local train_loader = SplitMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes, 'train')
+local train_loader = SplitMinibatchLoader.create(opt.train_data_dir, opt.batch_size, opt.seq_length, split_sizes)
+local eval_loader = SplitMinibatchLoader.create(opt.eval_data_dir, opt.batch_size, opt.seq_length, split_sizes)
 local feats_dim = train_loader.feats_dim
 local vocab_size = train_loader.vocab_size
-local vocab = train_loader.vocab
 print('keywords size: ' .. vocab_size)
 
 -- define the model: prototypes for one timestep, then clone them in time
@@ -130,29 +133,35 @@ end
 print('number of parameters in the model: ' .. params:nElement())
 
 -- evaluate the loss over an entire split
-function eval_split(split_index, batches)
-	print('evaluating loss over split index ' .. split_index)
-	-- local n = loader.split_sizes[split_index]
-	if batches ~= nil then n = math.min(batches, n) end
+function eval_split(nbatch)
+	print('evaluating loss over validation set')
 	
 	local loss = 0
-	local rnn_state={[0] = init_state}
+	local rnn_state={init_state}
 
-	for i = 1,n do -- iterate over batches in the split
+	for i = 1,nbatch do -- iterate over batches in the split
 		-- fetch a batch
-		local inputs, targets = train_loader:next_batch()
+		local inputs, targets, uttLen, seq_length = eval_loader:next_batch()
+		if opt.useGPU > 0 then
+			-- have to convert to float because integers can't be cuda()'d
+			inputs = inputs:float():cuda()
+			targets = targets:float():cuda()
+		end
+
 		-- forward pass
 		protos.rnn:evaluate() -- for dropout proper functioning
-		local lst = protos.rnn:forward{inputs, unpack(rnn_stat)}
-		rnn_state = {}
-		for i=1,#init_state do table.insert(rnn_state,lst[i]) end
-		prediction = lst[#lst]
-		loss = loss + protos.criterion:forward(prediction,targets)
+		for t = 1, seq_length do
+			local lst = protos.rnn:forward{inputs[t], unpack(rnn_stat)}
+			rnn_state = {}
+			for i=1,#init_state do table.insert(rnn_state,lst[i]) end
+			prediction = lst[#lst]
+			loss = loss + protos.criterion:forward(prediction,targets)
+		end
 		
-		print(i .. '/' .. n .. '...')
+		print(i .. '/' .. nbatch .. '...')
 	end
 	
-	loss = loss / n
+	loss = loss / seq_length / nbatch
 	return loss
 end
 
@@ -165,7 +174,8 @@ function feval(x)
 	grad_params:zero()
 	local timer = torch.Timer()
 	-- get minibatch
-	local inputs, targets, uttLen = train_loader:next_batch()
+	local inputs, targets, uttLen, seq_length = train_loader:next_batch()
+	
 	if opt.useGPU > 0 then
 		-- have to convert to float because integers can't be cuda()'d
 		inputs = inputs:float():cuda()
@@ -182,39 +192,41 @@ function feval(x)
 	-- forward pass
 	print("-- forward pass --")
 	protos.rnn:training()
-	--[[
-	local lst = protos.rnn:forward{inputs,unpack(rnn_state)}
-	rnn_state = {}
-	for i = 1, #init_state do table.insert(rnn_state, lst[i]) end -- extract the state, without output
-	predictions = lst[#lst] -- last element is the prediction
-	loss = loss + protos.criterion:forward(predictions,targets)]]--
-	for t = 1, opt.seq_length do
+	for t = 1, seq_length do
 		local lst = protos.rnn:forward{inputs[t], unpack(rnn_state[t-1])}
 		rnn_state[t] = {}
 		for i = 1, #init_state do table.insert(rnn_state[t], lst[i]) end	-- extract the state, without output
 		predictions[t] = lst[#lst]	-- last element is the prediction
-		loss = loss + protos.criterion:forward(predictions[t], targets[t])
+		local curloss = protos.criterion:forward(predictions[t], targets[t])
+		loss = loss + curloss
+		--print(curloss)
+		--print(predictions[t]:mean(2))
 	end
-	loss = loss / opt.seq_length
-		
+	loss = loss / seq_length
+
+	if (loss ~= loss) then	-- loss is nan
+		print(seq_length, loss)
+		for t = 1, seq_length do
+			local lst = protos.rnn:forward{inputs[t], unpack(rnn_state[t-1])}
+			rnn_state[t] = {}
+			for i = 1, #init_state do table.insert(rnn_state[t], lst[i]) end	-- extract the state, without output
+			predictions[t] = lst[#lst]	-- last element is the prediction
+			local curloss = protos.criterion:forward(predictions[t], targets[t])
+			loss = loss + curloss
+			print(curloss)
+			print(targets[t])
+			print(inputs[t]:mean(2))
+			print(predictions[t]:mean(2))
+		end
+		--print(predictions[1]);
+	--	print(targets[1]);
+	end
 	local time2 = timer:time().real
 	
 	-- backward pass
 	print("-- backward pass --")
-	--[[
-	-- initialize gradient at time t to be zeros (there's no influence from future)
-	local drnn_state = clone_list(init_state, true) -- true also zeros clones
-		
-	-- backprop through loss, and softmax/linear
-	local doutput = protos.criterion:backward(predictions,targets);
-	for i=curNum+1, opt.batch_size do
-		doutput[i] = torch.zeros(vocab_size)
-	end
-	table.insert(drnn_state, doutput);
-	protos.rnn:backward({inputs, unpack(rnn_state)}, drnn_state)
-	]]--
-	local drnn_state = {[opt.seq_length] = clone_list(init_state, true)}
-	for t = opt.seq_length,1,-1 do
+	local drnn_state = {[seq_length] = clone_list(init_state, true)}
+	for t = seq_length,1,-1 do
 		local doutput_t = protos.criterion:backward(predictions[t], targets[t])
 		for i = 1, opt.batch_size do
 			if uttLen[i]<t then
@@ -245,11 +257,21 @@ end
 train_losses = {}
 val_losses = {}
 local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
-local iterations = opt.max_epochs * train_loader.nbatches
-local iterations_per_epoch = train_loader.nsamples
+--local iterations = opt.max_epochs * train_loader.nbatches
+--local iterations_per_epoch = train_loader.nsamples
 local loss0 = nil
-for i = 1, iterations do
-	local epoch = i / train_loader.nbatches
+local i=0
+local epoch=1
+local lastsample=1
+local eval
+repeat
+	--local epoch = i / train_loader.nbatches
+	i = i+1
+	if (train_loader.curSample==1 and lastsample ~= 1) then
+		epoch = epoch + 1
+		eval = true
+	end
+	lastsample = train_loader.curSample
 
 	local timer = torch.Timer()
 	local _, loss = optim.rmsprop(feval, params, optim_state)
@@ -262,7 +284,8 @@ for i = 1, iterations do
 	local train_loss = loss[1]
 	train_losses[i] = train_loss
 
-	if i % train_loader.nsamples == 0 and opt.learning_rate_decay < 1 then
+	--if i % iterations_per_epoch == 0 and opt.learning_rate_decay < 1 then
+	if opt.learning_rate_decay < 1 then
 		if epoch >= opt.learning_rate_decay_after then
 			local decay_factor = opt.learning_rate_decay
 			optim_state.learningRate = optim_state.learningRate * decay_factor
@@ -270,26 +293,31 @@ for i = 1, iterations do
 		end
 	end
 
-	if i % opt.eval_val_every == 0 or i == iterations then
+	--if i % opt.eval_val_every == 0 or i == iterations then
+	if eval or i % opt.eval_val_every == 0 then
 		-- evaluate loss on validation data
-		local val_loss = eval_split(2) -- 2 = validation
+		local nbatch = eval_loader.nbatches
+		local val_loss = eval_split(nbatch) 
+		eval_loader.curidx = 1	-- reset the start index of evaluation data to 1
 		val_losses[i] = val_loss
+		eval = false
 
 		local savefile = string.format('%s/lm_%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
 		print('saving checkpoint to ' .. savefile)
 		local checkpoint = {}
 		checkpoint.protos = protos
 		checkpoint.opt = opt
-		checkpoint.train_losses = train_losses
+		--checkpoint.train_losses = train_losses
 		checkpoint.val_loss = val_loss
-		checkpoint.val_losses = val_losses
+		--checkpoint.val_losses = val_losses
 		checkpoint.i = i
 		checkpoint.epoch = epoch
 		torch.save(savefile, checkpoint)
 	end
 
 	if i % opt.print_every == 0 then
-		print(string.format("%d/%d (epoch %.3f), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.4fs", i, iterations, epoch, train_loss, grad_params:norm() / params:norm(), time))
+		--print(string.format("%d/%d (epoch %.3f), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.4fs", i, iterations, epoch, train_loss, grad_params:norm() / params:norm(), time))
+		print(string.format("%d(epoch %d), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.4fs", i, epoch, train_loss, grad_params:norm() / params:norm(), time))
 	end
 
 	if i % 10 == 0 then collectgarbage() end
@@ -304,4 +332,4 @@ for i = 1, iterations do
 		print('loss is exploding, aborting.')
 		break
 	end
-end
+until epoch > 5 

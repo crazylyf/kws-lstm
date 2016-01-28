@@ -1,3 +1,7 @@
+!*.lua
+!*.py
+*.swp
+
 ## Input ##
 *input.txt
 *text
@@ -6,3 +10,15 @@
 ## Generation ##
 vocab
 feat_dim
+
+## Data ##
+data/align.map.mlf
+data/car.fbanklist
+data/car.wavlist
+data/config.wb.24dimfbank.raw.16k.20ms.30msw
+data/fbank/
+data/mlf/
+data/src/tmpfeature
+data/tensors/
+data/testset/
+data/vocab/
