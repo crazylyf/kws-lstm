@@ -137,11 +137,13 @@ function eval_split(nbatch)
 	print('evaluating loss over validation set')
 	
 	local loss = 0
-	local rnn_state={init_state}
+	local rnn_state=init_state
+	local seq_length
 
 	for i = 1,nbatch do -- iterate over batches in the split
 		-- fetch a batch
-		local inputs, targets, uttLen, seq_length = eval_loader:next_batch()
+		local inputs, targets, uttLen
+		inputs, targets, uttLen, seq_length = eval_loader:next_batch()
 		if opt.useGPU > 0 then
 			-- have to convert to float because integers can't be cuda()'d
 			inputs = inputs:float():cuda()
@@ -151,11 +153,11 @@ function eval_split(nbatch)
 		-- forward pass
 		protos.rnn:evaluate() -- for dropout proper functioning
 		for t = 1, seq_length do
-			local lst = protos.rnn:forward{inputs[t], unpack(rnn_stat)}
+			local lst = protos.rnn:forward{inputs[t], unpack(rnn_state)}
 			rnn_state = {}
 			for i=1,#init_state do table.insert(rnn_state,lst[i]) end
-			prediction = lst[#lst]
-			loss = loss + protos.criterion:forward(prediction,targets)
+			predictions = lst[#lst]
+			loss = loss + protos.criterion:forward(predictions,targets[t])
 		end
 		
 		print(i .. '/' .. nbatch .. '...')
@@ -197,30 +199,10 @@ function feval(x)
 		rnn_state[t] = {}
 		for i = 1, #init_state do table.insert(rnn_state[t], lst[i]) end	-- extract the state, without output
 		predictions[t] = lst[#lst]	-- last element is the prediction
-		local curloss = protos.criterion:forward(predictions[t], targets[t])
-		loss = loss + curloss
-		--print(curloss)
-		--print(predictions[t]:mean(2))
+		loss = loss + protos.criterion:forward(predictions[t], targets[t])
 	end
-	loss = loss / seq_length
+	loss = loss / seq_length 
 
-	if (loss ~= loss) then	-- loss is nan
-		print(seq_length, loss)
-		for t = 1, seq_length do
-			local lst = protos.rnn:forward{inputs[t], unpack(rnn_state[t-1])}
-			rnn_state[t] = {}
-			for i = 1, #init_state do table.insert(rnn_state[t], lst[i]) end	-- extract the state, without output
-			predictions[t] = lst[#lst]	-- last element is the prediction
-			local curloss = protos.criterion:forward(predictions[t], targets[t])
-			loss = loss + curloss
-			print(curloss)
-			print(targets[t])
-			print(inputs[t]:mean(2))
-			print(predictions[t]:mean(2))
-		end
-		--print(predictions[1]);
-	--	print(targets[1]);
-	end
 	local time2 = timer:time().real
 	
 	-- backward pass
@@ -254,8 +236,8 @@ function feval(x)
 end
 
 -- start optimization here
-train_losses = {}
-val_losses = {}
+-- train_losses = {}
+-- val_losses = {}
 local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
 --local iterations = opt.max_epochs * train_loader.nbatches
 --local iterations_per_epoch = train_loader.nsamples
@@ -264,6 +246,9 @@ local i=0
 local epoch=1
 local lastsample=1
 local eval
+		local nbatch = eval_loader.nbatches
+		local val_loss = eval_split(nbatch) 
+		os.exit()
 repeat
 	--local epoch = i / train_loader.nbatches
 	i = i+1
@@ -282,7 +267,7 @@ repeat
 	local time = timer:time().real
 
 	local train_loss = loss[1]
-	train_losses[i] = train_loss
+	-- train_losses[i] = train_loss
 
 	--if i % iterations_per_epoch == 0 and opt.learning_rate_decay < 1 then
 	if opt.learning_rate_decay < 1 then
@@ -299,9 +284,10 @@ repeat
 		local nbatch = eval_loader.nbatches
 		local val_loss = eval_split(nbatch) 
 		eval_loader.curidx = 1	-- reset the start index of evaluation data to 1
-		val_losses[i] = val_loss
+		-- val_losses[i] = val_loss
 		eval = false
-
+		print(string.format("%d(epoch %d), eval_loss = %6.8f", i, epoch, val_loss))
+		
 		local savefile = string.format('%s/lm_%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
 		print('saving checkpoint to ' .. savefile)
 		local checkpoint = {}

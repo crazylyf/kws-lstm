@@ -1,6 +1,8 @@
 !*.lua
 !*.py
 *.swp
+qsub.sh
+*.[eo]*
 
 ## Input ##
 *input.txt
