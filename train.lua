@@ -65,11 +65,10 @@ if opt.useGPU > 0 then
 	end
 end
 
---data
 -- create the data loader class
 print('preparing data')
-local train_loader = SplitMinibatchLoader.create(opt.train_data_dir, opt.batch_size, opt.seq_length, split_sizes)
-local eval_loader = SplitMinibatchLoader.create(opt.eval_data_dir, opt.batch_size, opt.seq_length, split_sizes)
+local train_loader = SplitMinibatchLoader.create(opt.train_data_dir, opt.batch_size, split_sizes)
+local eval_loader = SplitMinibatchLoader.create(opt.eval_data_dir, opt.batch_size, split_sizes)
 local feats_dim = train_loader.feats_dim
 local vocab_size = train_loader.vocab_size
 print('keywords size: ' .. vocab_size)
@@ -144,6 +143,7 @@ function eval_split(nbatch)
 		-- fetch a batch
 		local inputs, targets, uttLen
 		inputs, targets, uttLen, seq_length = eval_loader:next_batch()
+		seq_length = uttLen[1]
 		if opt.useGPU > 0 then
 			-- have to convert to float because integers can't be cuda()'d
 			inputs = inputs:float():cuda()
@@ -175,7 +175,7 @@ function feval(x)
 	end
 	grad_params:zero()
 	local timer = torch.Timer()
-	-- get minibatch
+	--------------------------- get minibatch --------------------------
 	local inputs, targets, uttLen, seq_length = train_loader:next_batch()
 	
 	if opt.useGPU > 0 then
@@ -186,13 +186,12 @@ function feval(x)
 	end
 	-- print(inputs:size(), targets:size())
 	local time1 = timer:time().real
-	-- forward pass
+
+	--------------------------- forward pass ---------------------------
 	local rnn_state = {[0] = init_state_global}
 	local predictions = {}     -- softmax outputs
 	local loss = 0
 	
-	-- forward pass
-	print("-- forward pass --")
 	protos.rnn:training()
 	for t = 1, seq_length do
 		local lst = protos.rnn:forward{inputs[t], unpack(rnn_state[t-1])}
@@ -205,8 +204,7 @@ function feval(x)
 
 	local time2 = timer:time().real
 	
-	-- backward pass
-	print("-- backward pass --")
+	--------------------------- backward pass --------------------------
 	local drnn_state = {[seq_length] = clone_list(init_state, true)}
 	for t = seq_length,1,-1 do
 		local doutput_t = protos.criterion:backward(predictions[t], targets[t])
@@ -220,14 +218,13 @@ function feval(x)
 		drnn_state[t-1] = {}
 		for k,v in pairs(dlst) do
 			if k > 1 then	-- k==1 is gradient on x, which we don't need
-				-- note we do k-1 because first item is dembeddings, and then follow the
-				-- derivatives of the state, starting at index 2.
+							-- note we do k-1 because first item is dembeddings, and then follow the
+							-- derivatives of the state, starting at index 2.
 				drnn_state[t-1][k-1] = v
 			end
 		end
 	end
 
-	-- init_state_global = rnn_state
 	init_stage_global = clone_list(init_state)
 	grad_params:clamp(-opt.grad_clip, opt.grad_clip)
 	local time3 = timer:time().real
@@ -286,6 +283,9 @@ repeat
 		print(string.format("%d(epoch %d), eval_loss = %6.8f", i, epoch, val_loss))
 		
 		local savefile = string.format('%s/lm_%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
+		if (not path.exists(opt.checkpoint_dir)) then
+			path.mkdir(opt.checkpoint_dir)
+		end
 		print('saving checkpoint to ' .. savefile)
 		local checkpoint = {}
 		checkpoint.protos = protos

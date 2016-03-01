@@ -18,7 +18,7 @@ function write2tensor(dest)
 		end
 		uttlen[i] = #features[i]
 	end
-	obj = {input = featTensor, target = labelTensor, uttLen = uttlen, vocab_size = #vocab}
+	local obj = {input = featTensor, target = labelTensor, uttLen = uttlen, vocab_size = #vocab}
 	torch.save(dest, obj)
 end
 
@@ -67,9 +67,9 @@ function getFile(file_name)		-- Splited MLF File
 			end
 			features[#features+1] = featTab
 			labels[#labels+1] 	  = labelTab
-			if (#features > 10240) then	-- greater than 10240 files been read
+			if (#features > chunksize) then	-- greater than 10240 files been read
 				dest = string.format('../tensors/tensor%03d', curfile); curfile = curfile + 1
-				if (curfile>25) then
+				if (curfile>startfile) then
 					write2tensor(dest)
 				end
 				features = {}; labels = {}
@@ -78,7 +78,10 @@ function getFile(file_name)		-- Splited MLF File
 		elseif (string.sub(line, -4, -2)=='lab') then
 			curname = string.sub(line, 4, -5)
 			print(file_name, line, curname .. "fbank")
-			if (curfile>=25) then
+			if (curfile>=48) then
+				chunksize = 2560
+			end
+			if (curfile >= startfile) then
 				os.execute("/slfs1/users/yl710/htk/HTKTools/HList ../fbank/" .. curname .. "fbank > tmpfeature")
 				featTab = getFeature()
 			else
@@ -86,34 +89,35 @@ function getFile(file_name)		-- Splited MLF File
 			end
 			labelTab = {}
 		else
-			if (curfile>=25) then
-			-- print(line)
-			local cnt = 0
-			local startt,endt,startf,endf
-			for k in line:gmatch("%S*") do
-				if (#k>0) then
-					if (cnt==0) then
-						startt = tonumber(k)
-						cnt = cnt+1
-					elseif (cnt==1) then
-						endt = tonumber(k)-100000
-						cnt = cnt+1
-					else
-						lb = vocab[k] 
+			if (curfile>=startfile) then
+				-- print(line)
+				local cnt = 0
+				local startt,endt,startf,endf
+				for k in line:gmatch("%S*") do
+					if (#k>0) then
+						if (cnt==0) then
+							startt = tonumber(k)
+							cnt = cnt+1
+						elseif (cnt==1) then
+							endt = tonumber(k)-100000
+							cnt = cnt+1
+						else
+							lb = vocab[k] 
+						end
 					end
 				end
-			end
-			startf = math.floor(startt / 200000)
-			endf   = math.floor(endt   / 200000)
-			for i=startf+1, endf+1 do
-				labelTab[i] = lb
-			end
+				startf = math.floor(startt / 200000)
+				endf   = math.floor(endt   / 200000)
+				for i=startf+1, endf+1 do
+					labelTab[i] = lb
+				end
 			end
 		end
 
 		line = f:read()
 	until not line
 	f:close()
+	collectgarbage()
 
 end
 
@@ -133,6 +137,7 @@ file:close()
 curfile = 1
 -- Reading Features --
 local fileLists = io.popen('ls ../mlf'):read("*all")
+chunksize = 10240
 
 features = {}; labels = {}
 -- write the features and labels to files in tensor format --
@@ -142,7 +147,13 @@ if (not path.exists('../tensors')) then
 	end
 end
 
+startfile = 74
+
 -- getFile("sortedmlftmp")
 for k in fileLists:gmatch("sortedmlf%S+") do
 	getFile(k)
+end
+if (#features>0) then
+	local dest = string.format('../tensors/tensor%03d', curfile); curfile = curfile + 1
+	write2tensor(dest)
 end

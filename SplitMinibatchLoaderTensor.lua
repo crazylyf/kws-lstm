@@ -1,7 +1,7 @@
 local SplitMinibatchLoader = {}
 SplitMinibatchLoader.__index = SplitMinibatchLoader
 
-function SplitMinibatchLoader.create(data_dir, batch_size, seq_length, split_fractions)
+function SplitMinibatchLoader.create(data_dir, batch_size, split_fractions)
 	-- split_fractions is e.g. {0.9, 0.05, 0.05}
 	local self = {}
 	setmetatable(self, SplitMinibatchLoader)
@@ -56,28 +56,20 @@ function SplitMinibatchLoader:next_batch()
 	local uttLen = torch.ones(self.batch_size):long()
 	
 	local j=1
-	while (self.curidx <= self.obj.input:size(2) and j<=self.batch_size) do
+	while (j<=self.batch_size) do
+		if (self.curidx > self.obj.input:size(2)) then
+			self.obj = tmpobj
+			self.curidx = 1
+		end
+
 		uttLen[j] = self.obj.uttLen[self.curidx]
-		for i = 1, self.obj.uttLen[self.curidx] do	-- utterence length dimension
+		for i = 1, self.obj.uttLen[self.curidx] do -- utterence length dimension
 			input[i][j] = self.obj.input[i][self.curidx]
 			target[i][j] = self.obj.target[i][self.curidx]
 		end
 		j = j + 1
 		self.curidx = self.curidx + 1
 	end
-	if (j<=self.batch_size) then
-		self.obj = tmpobj
-		self.curidx = 1
-		while (self.curidx <= self.obj.input:size(2) and j<=self.batch_size) do
-			uttLen[j] = self.obj.uttLen[self.curidx]
-			for i = 1, self.obj.uttLen[self.curidx] do
-				input[i][j] = self.obj.input[i][self.curidx]
-				target[i][j] = self.obj.target[i][self.curidx]
-			end
-			j = j+1
-			self.curidx= self.curidx
-		end
-	end	
 
 	return input, target, uttLen, seq_length	-- curNum is used to record the number of meaningful frames, the rest of frames in the input/target are random tensors.
 end

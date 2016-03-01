@@ -1,6 +1,7 @@
 !*.lua
 !*.py
 *.swp
+*.swo
 qsub.sh
 *.[eo]*
 
@@ -24,3 +25,4 @@ data/src/tmpfeature
 data/tensors/
 data/testset/
 data/vocab/
+cv/
