@@ -50,7 +50,7 @@ function getFile(file_name)		-- Splited MLF File
 	local f = assert(io.open("../mlf/" .. file_name, 'r'))
 	local line = f:read()
 	local curname
-	local featTab, labelTab
+	local featTab, labelTab, ctclabelTab
 	repeat
 		if (string.len(line)==1) then
 			while (#featTab ~= #labelTab) do
@@ -67,12 +67,13 @@ function getFile(file_name)		-- Splited MLF File
 			end
 			features[#features+1] = featTab
 			labels[#labels+1] 	  = labelTab
+			ctclabels[#ctclabesl+1] = ctclabelTab
 			if (#features > chunksize) then	-- greater than 10240 files been read
 				dest = string.format('../tensors/tensor%03d', curfile); curfile = curfile + 1
 				if (curfile>startfile) then
 					write2tensor(dest)
 				end
-				features = {}; labels = {}
+				features = {}; labels = {}; ctclabels = {}
 				collectgarbage()
 			end
 		elseif (string.sub(line, -4, -2)=='lab') then
@@ -82,12 +83,12 @@ function getFile(file_name)		-- Splited MLF File
 				chunksize = 2560
 			end
 			if (curfile >= startfile) then
-				os.execute("/slfs1/users/yl710/htk/HTKTools/HList ../fbank/" .. curname .. "fbank > tmpfeature")
+				os.execute("/speechlab/tools/HTK/htkbin/htk64/HList ../fbank/" .. curname .. "fbank > tmpfeature")
 				featTab = getFeature()
 			else
 				featTab = {}
 			end
-			labelTab = {}
+			labelTab = {}; ctclabelTab = {}
 		else
 			if (curfile>=startfile) then
 				-- print(line)
@@ -139,7 +140,7 @@ curfile = 1
 local fileLists = io.popen('ls ../mlf'):read("*all")
 chunksize = 10240
 
-features = {}; labels = {}
+features = {}; labels = {}; ctclabels = {}
 -- write the features and labels to files in tensor format --
 if (not path.exists('../tensors')) then
 	if (not path.mkdir('../tensors')) then
@@ -147,7 +148,7 @@ if (not path.exists('../tensors')) then
 	end
 end
 
-startfile = 74
+startfile = 1
 
 -- getFile("sortedmlftmp")
 for k in fileLists:gmatch("sortedmlf%S+") do
