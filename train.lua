@@ -89,7 +89,7 @@ else
 	print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
 	protos = {}
 	if opt.model == 'lstm' then
-		protos.rnn = LSTM.lstm(feats_dim, opt.rnn_size, vocab_size, opt.num_layers, opt.dropout)
+		protos.rnn = LSTM.lstm(feats_dim, opt.rnn_size, vocab_size+1, opt.num_layers, opt.dropout)
 	end
 	protos.criterion = nn.ClassNLLCriterion()
 end

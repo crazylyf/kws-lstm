@@ -7,6 +7,7 @@ function write2tensor(dest)
 	local featTensor  = torch.Tensor(nframes, nutt, featdim)
 	local labelTensor = torch.ones(nframes, nutt)
 	local uttlen      = torch.zeros(nutt)
+
 	for i=1,nutt do
 		for j=1,#features[i] do	--feature[i] consists of all the frames of utterence i
 			-- feature --
@@ -18,7 +19,7 @@ function write2tensor(dest)
 		end
 		uttlen[i] = #features[i]
 	end
-	local obj = {input = featTensor, target = labelTensor, uttLen = uttlen, vocab_size = #vocab}
+	local obj = {input = featTensor, target = labelTensor, ctclabel = ctclabels, uttLen = uttlen, vocab_size = #vocab}
 	torch.save(dest, obj)
 end
 
@@ -67,7 +68,8 @@ function getFile(file_name)		-- Splited MLF File
 			end
 			features[#features+1] = featTab
 			labels[#labels+1] 	  = labelTab
-			ctclabels[#ctclabesl+1] = ctclabelTab
+			ctclabels[#ctclabels+1] = ctclabelTab
+
 			if (#features > chunksize) then	-- greater than 10240 files been read
 				dest = string.format('../tensors/tensor%03d', curfile); curfile = curfile + 1
 				if (curfile>startfile) then
@@ -83,7 +85,7 @@ function getFile(file_name)		-- Splited MLF File
 				chunksize = 2560
 			end
 			if (curfile >= startfile) then
-				os.execute("/speechlab/tools/HTK/htkbin/htk64/HList ../fbank/" .. curname .. "fbank > tmpfeature")
+				os.execute(HlistLoc .. " ../fbank/" .. curname .. "fbank > tmpfeature")
 				featTab = getFeature()
 			else
 				featTab = {}
@@ -103,14 +105,16 @@ function getFile(file_name)		-- Splited MLF File
 							endt = tonumber(k)-100000
 							cnt = cnt+1
 						else
-							lb = vocab[k] 
+							--lb = vocab[k] 
+							ctclabelTab[#ctclabelTab+1] = vocab[k]
 						end
 					end
 				end
 				startf = math.floor(startt / 200000)
 				endf   = math.floor(endt   / 200000)
 				for i=startf+1, endf+1 do
-					labelTab[i] = lb
+					--labelTab[i] = lb
+					labelTab[i] = ctclabelTab[#ctclabelTab]
 				end
 			end
 		end
@@ -135,21 +139,22 @@ while (word) do
 end
 file:close()
 
-curfile = 1
--- Reading Features --
-local fileLists = io.popen('ls ../mlf'):read("*all")
+-- initialize variables --
+curfile = 1; startfile = 1
 chunksize = 10240
-
 features = {}; labels = {}; ctclabels = {}
--- write the features and labels to files in tensor format --
+--HlistLoc = "/speechlab/tools/HTK/htkbin/htk64/HList"
+HlistLoc = "/slfs1/users/yl710/htk/HTKTools/HList"
+
+-- check whether the destination directories exist --
 if (not path.exists('../tensors')) then
 	if (not path.mkdir('../tensors')) then
 		print("-- Error: cannot create directory ../tensors/ to store tensors --")
 	end
 end
 
-startfile = 1
-
+-- Reading Features --
+local fileLists = io.popen('ls ../mlf'):read("*all")
 -- getFile("sortedmlftmp")
 for k in fileLists:gmatch("sortedmlf%S+") do
 	getFile(k)
